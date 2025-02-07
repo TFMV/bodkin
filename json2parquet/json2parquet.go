@@ -2,7 +2,6 @@ package json2parquet
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,16 +18,23 @@ func FromReader(r io.Reader, opts ...bodkin.Option) (*arrow.Schema, int, error) 
 	s := bufio.NewScanner(r)
 	u := bodkin.NewBodkin(opts...)
 	for s.Scan() {
-		u.Unify(s.Bytes())
+		err = u.Unify(s.Bytes())
+		if err != nil {
+			return nil, 0, err
+		}
 		if u.Count() > u.MaxCount() {
 			break
 		}
 	}
+	if err = s.Err(); err != nil {
+		return nil, 0, err
+	}
+
 	schema, err := u.Schema()
 	if err != nil {
-		return nil, u.Count(), err
+		return nil, 0, err
 	}
-	return schema, u.Count(), err
+	return schema, u.Count(), nil
 }
 
 func SchemaFromFile(inputFile string, opts ...bodkin.Option) (*arrow.Schema, int, error) {
@@ -48,13 +54,8 @@ func RecordsFromFile(inputFile, outputFile string, schema *arrow.Schema, munger 
 	if err != nil {
 		return 0, err
 	}
-	defer func() {
-		if r := recover(); r != nil {
-			fmt.Println(err)
-			fmt.Println("Records:", n)
-		}
-	}()
 	defer f.Close()
+
 	var prp *parquet.WriterProperties = pq.DefaultWrtp
 	if len(opts) != 0 {
 		prp = parquet.NewWriterProperties(opts...)
@@ -65,40 +66,21 @@ func RecordsFromFile(inputFile, outputFile string, schema *arrow.Schema, munger 
 	}
 	defer pw.Close()
 
-	var r io.Reader
-	var rdr *array.JSONReader
-	chunk := 1024
-	munger = nil
-	r = bufio.NewReaderSize(f, 1024*1024*128)
-	if munger != nil {
-		pr, pwr := io.Pipe()
-
-		go func() {
-			// close the writer, so the reader knows there's no more data
-			defer pwr.Close()
-			munger(r, pwr)
-		}()
-		rdr = array.NewJSONReader(pr, schema, array.WithChunk(chunk))
-	} else {
-		rdr = array.NewJSONReader(r, schema, array.WithChunk(chunk))
-	}
-
+	r := bufio.NewReaderSize(f, 1024*1024*128)
+	rdr := array.NewJSONReader(r, schema, array.WithChunk(1024))
 	defer rdr.Release()
 
 	for rdr.Next() {
 		rec := rdr.Record()
-		err1 := pw.WriteRecord(rec)
-		if err != nil {
-			err = errors.Join(err, fmt.Errorf("failed to write parquet record: %v", err1))
+		if err := pw.WriteRecord(rec); err != nil {
+			return n, fmt.Errorf("failed to write parquet record: %v", err)
 		}
-		n = n + chunk
+		n += int(rec.NumRows())
 	}
+
 	if err := rdr.Err(); err != nil {
 		return n, err
 	}
-	err = pw.Close()
-	if err != nil {
-		return n, err
-	}
-	return n, err
+
+	return n, pw.Close()
 }
