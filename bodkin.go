@@ -139,7 +139,7 @@ func (u *Bodkin) Changes() error { return u.changes }
 func (u *Bodkin) Count() int { return u.unificationCount }
 
 // MaxCount returns the maximum number of datum to be evaluated for schema.
-func (u *Bodkin) MaxCount() int { return u.unificationCount }
+func (u *Bodkin) MaxCount() int { return u.maxCount }
 
 // ResetCount resets the count of datum evaluated for schema to date.
 func (u *Bodkin) ResetCount() int {
@@ -231,6 +231,7 @@ func (u *Bodkin) Unify(a any) error {
 		f := newFieldPos(u)
 		mapToArrow(f, m)
 		u.old = f
+		u.unificationCount++
 		return nil
 	}
 	f := newFieldPos(u)
